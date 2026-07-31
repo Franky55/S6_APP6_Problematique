@@ -14,6 +14,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 
 namespace gif643 {
 
@@ -23,6 +24,7 @@ const int       NUM_THREADS = 1;    // Default value, changed by argv.
 const int       NEW_NUM_THREADS = 3;
 std::condition_variable cv_;
 std::mutex      mutex_;
+std::atomic<int> active_tasks_{0};
 
 using PNGDataVec = std::vector<char>;
 using PNGDataPtr = std::shared_ptr<PNGDataVec>;
@@ -251,9 +253,17 @@ public:
 
     ~Processor()
     {
-        should_run_ = false;
-        for (auto& qthread: queue_threads_) {
-            qthread.join();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            should_run_ = false;
+        }
+
+        cv_.notify_all();
+
+        for (auto& qthread : queue_threads_) {
+            if (qthread.joinable()) {
+                qthread.join();
+            }
         }
     }
 
@@ -313,11 +323,21 @@ public:
     /// nothing is queued.
     void parseAndQueue(const std::string& line_org)
     {
-        std::queue<TaskDef> queue;
         TaskDef def;
-        if (parse(line_org, def)) {
-            std::cerr << "Queueing task '" << line_org << "'." << std::endl;
-            task_queue_.push(def);
+
+        if (parse(line_org, def))
+        {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+
+                std::cerr << "Queueing task '"
+                        << line_org
+                        << "'."
+                        << std::endl;
+
+                task_queue_.push(def);
+            }
+
             cv_.notify_one();
         }
     }
@@ -325,29 +345,57 @@ public:
     /// \brief Returns if the internal queue is empty (true) or not.
     bool queueEmpty()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return task_queue_.empty();
+    }
+
+    bool isFinished()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        return task_queue_.empty()
+            && active_tasks_ == 0;
     }
 
 private:
     /// \brief Queue processing thread function.
     void processQueue()
+{
+    while (true)
     {
-        while (should_run_) {
-            std::cerr << "Waiting for task_queu not empty" << std::endl;
+        TaskDef task_def;
+
+        {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [&]{ return !task_queue_.empty(); }); 
-            
-            std::cerr << "Going to do task" << std::endl;
-            if (!task_queue_.empty()) {
-                TaskDef task_def = task_queue_.front();
-                task_queue_.pop();
-                TaskRunner runner(task_def);
-                runner();
+
+            cv_.wait(lock, [&] {
+                return !task_queue_.empty() || !should_run_;
+            });
+
+            if (!should_run_ && task_queue_.empty()) {
+                return;
             }
-            lock.unlock();
-            
+
+            task_def = task_queue_.front();
+            task_queue_.pop();
+
+            active_tasks_++;
         }
+
+        try
+        {
+            TaskRunner runner(task_def);
+            runner();
+        }
+        catch (...)
+        {
+            std::cerr << "Unhandled exception in worker thread"
+                      << std::endl;
+        }
+
+        active_tasks_--;
     }
+}
 };
 
 }
@@ -391,5 +439,7 @@ int main(int argc, char** argv)
     }
 
     // Wait until the processor queue's has tasks to do.
-    while (!proc.queueEmpty()) {};
+    while (!proc.isFinished())
+    {
+    }
 }
