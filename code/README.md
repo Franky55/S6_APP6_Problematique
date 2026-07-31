@@ -81,3 +81,17 @@ PNG.
 
 [Google Material design icons](https://github.com/google/material-design-icons):
 pour les fichiers à traiter (sous-ensemble).
+
+
+## Fixing the python file ending
+
+```
+sed -i 's/\r$//' ../scripts/multi_proc.py
+sed -i 's/\r$//' ../scripts/gen_tasks.py
+```
+
+## Running the scripts from build
+
+```
+../scripts/run_batch.sh  
+```

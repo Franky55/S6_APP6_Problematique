@@ -21,10 +21,9 @@ namespace gif643 {
 const size_t    BPP         = 4;    // Bytes per pixel
 const float     ORG_WIDTH   = 48.0; // Original SVG image width in px.
 const int       NUM_THREADS = 1;    // Default value, changed by argv. 
-const int       NEW_NUM_THREADS = 3;
+const int       NEW_NUM_THREADS = 96;
 std::condition_variable cv_;
 std::mutex      mutex_;
-std::atomic<int> active_tasks_{0};
 
 using PNGDataVec = std::vector<char>;
 using PNGDataPtr = std::shared_ptr<PNGDataVec>;
@@ -215,6 +214,7 @@ class Processor
 private:
     // The tasks to run queue (FIFO).
     std::queue<TaskDef> task_queue_;
+    std::atomic<int> active_tasks_{0};
 
     // The cache hash map (TODO). Note that we use the string definition as the // key.
     using PNGHashMap = std::unordered_map<std::string, PNGDataPtr>;
@@ -352,7 +352,6 @@ public:
     bool isFinished()
     {
         std::lock_guard<std::mutex> lock(mutex_);
-
         return task_queue_.empty()
             && active_tasks_ == 0;
     }
