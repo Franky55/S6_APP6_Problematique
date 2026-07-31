@@ -12,12 +12,17 @@
 #include <string>
 #include <cstring>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 
 namespace gif643 {
 
 const size_t    BPP         = 4;    // Bytes per pixel
 const float     ORG_WIDTH   = 48.0; // Original SVG image width in px.
 const int       NUM_THREADS = 1;    // Default value, changed by argv. 
+const int       NEW_NUM_THREADS = 3;
+std::condition_variable cv_;
+std::mutex      mutex_;
 
 using PNGDataVec = std::vector<char>;
 using PNGDataPtr = std::shared_ptr<PNGDataVec>;
@@ -139,6 +144,7 @@ public:
 
         try {
             // Read the file ...
+
             image_in = nsvgParseFromFile(fname_in.c_str(), "px", 0);
             if (image_in == nullptr) {
                 std::string msg = "Cannot parse '" + fname_in + "'.";
@@ -312,6 +318,7 @@ public:
         if (parse(line_org, def)) {
             std::cerr << "Queueing task '" << line_org << "'." << std::endl;
             task_queue_.push(def);
+            cv_.notify_one();
         }
     }
 
@@ -326,12 +333,19 @@ private:
     void processQueue()
     {
         while (should_run_) {
+            std::cerr << "Waiting for task_queu not empty" << std::endl;
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait(lock, [&]{ return !task_queue_.empty(); }); 
+            
+            std::cerr << "Going to do task" << std::endl;
             if (!task_queue_.empty()) {
                 TaskDef task_def = task_queue_.front();
                 task_queue_.pop();
                 TaskRunner runner(task_def);
                 runner();
             }
+            lock.unlock();
+            
         }
     }
 };
@@ -360,7 +374,7 @@ int main(int argc, char** argv)
     }
 
     // TODO: change the number of threads from args.
-    Processor proc;
+    Processor proc(NEW_NUM_THREADS);
     
     while (!std::cin.eof()) {
 
