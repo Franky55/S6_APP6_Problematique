@@ -20,7 +20,11 @@ files = glob.glob("*.svg")
 for f in files:
     basename    = os.path.splitext(f)[0]
     pngname     = basename + ".png"
-    print("%s;%s;%s"%(
+    line = "%s;%s;%s" % (
         os.path.join(dirname, f),
         os.path.join(out_dirname, pngname),
-        width))
+        width
+    )
+
+    print(line)
+    print(line) 

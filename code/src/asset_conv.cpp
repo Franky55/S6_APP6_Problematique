@@ -22,6 +22,8 @@ const size_t    BPP         = 4;    // Bytes per pixel
 const float     ORG_WIDTH   = 48.0; // Original SVG image width in px.
 const int       NUM_THREADS = 1;    // Default value, changed by argv. 
 const int       NEW_NUM_THREADS = 96;
+const bool      VERBOSE       = true;
+
 std::condition_variable cv_;
 std::mutex      mutex_;
 
@@ -140,10 +142,13 @@ public:
         const size_t        image_size  = height * stride;
         const float&        scale       = float(width) / ORG_WIDTH;
 
-        std::cerr << "Running for "
-                  << fname_in 
-                  << "..." 
-                  << std::endl;
+        if (VERBOSE)
+        {
+            std::cerr << "Running for "
+                << fname_in 
+                << "..." 
+                << std::endl;
+        }
 
         NSVGimage*          image_in        = nullptr;
         NSVGrasterizer*     rast            = nullptr;
@@ -193,11 +198,15 @@ public:
         nsvgDelete(image_in);
         nsvgDeleteRasterizer(rast);
 
-        std::cerr << std::endl 
+        if(VERBOSE)
+        {
+            std::cerr << std::endl 
                   << "Done for "
                   << fname_in 
                   << "." 
                   << std::endl;
+        }
+        
 
         return true;
     }
@@ -339,10 +348,13 @@ public:
             {
                 std::lock_guard<std::mutex> lock(mutex_);
 
-                std::cerr << "Queueing task '"
-                        << line_org
-                        << "'."
-                        << std::endl;
+                if(VERBOSE)
+                {
+                    std::cerr << "Queueing task '"
+                            << line_org
+                            << "'."
+                            << std::endl;
+                }
 
                 task_queue_.push(def);
             }
@@ -368,50 +380,60 @@ public:
 private:
     /// \brief Queue processing thread function.
     void processQueue()
-{
-    while (true)
     {
-        TaskDef task_def;
-
+        while (true)
         {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [&] {return !task_queue_.empty() || !should_run_;});
+            TaskDef task_def;
 
-            if (!should_run_ && task_queue_.empty()) {
-                return;
-            }
-
-            task_def = task_queue_.front();
-            task_queue_.pop();
-
-            if(png_cache_.find(task_def.fname_out) != png_cache_.end()) // Image not found
-                return;
-
-            active_tasks_++;
-        }
-
-        try
-        {
-            TaskRunner runner(task_def);
-            if(runner())
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                png_cache_[runner.get_task_fname_out()] = runner.getPNG_data();
-            }
-            else
-            {
-                std::cerr << "Image not added to hash map" << std::endl;
-            }
-        }
-        catch (...)
-        {
-            std::cerr << "Unhandled exception in worker thread"
-                      << std::endl;
-        }
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&] {return !task_queue_.empty() || !should_run_;});
 
-        active_tasks_--;
+                if (!should_run_ && task_queue_.empty()) {
+                    return;
+                }
+
+                task_def = task_queue_.front();
+                task_queue_.pop();
+
+                if(png_cache_.find(task_def.fname_out) != png_cache_.end()) // Image not found
+                {
+                    if(VERBOSE)
+                        std::cerr << "Image already in hash map: " << task_def.fname_out<< std::endl;
+                    
+                    continue;
+                }
+                else
+                {
+                    png_cache_[task_def.fname_out] = nullptr; 
+                    // std::cerr << "Adding image to hash map: " << task_def.fname_out << std::endl;
+                }
+
+                active_tasks_++;
+            }
+
+            try
+            {
+                TaskRunner runner(task_def);
+                if(runner())
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    png_cache_[runner.get_task_fname_out()] = runner.getPNG_data();
+                }
+                else
+                {
+                    std::cerr << "Image not added to hash map" << std::endl;
+                }
+            }
+            catch (...)
+            {
+                std::cerr << "Unhandled exception in worker thread"
+                        << std::endl;
+            }
+
+            active_tasks_--;
+        }
     }
-}
 };
 
 }
