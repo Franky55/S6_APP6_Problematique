@@ -16,6 +16,7 @@ if len(sys.argv) >= 4:
 os.chdir(dirname)
 files = glob.glob("*.svg")
 
+# for i in range(2):
 for f in files:
     basename    = os.path.splitext(f)[0]
     pngname     = basename + ".png"

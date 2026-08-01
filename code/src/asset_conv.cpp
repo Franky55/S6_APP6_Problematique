@@ -118,14 +118,19 @@ class TaskRunner
 {
 private:
     TaskDef task_def_;
+    PNGDataPtr png_data_;
 
 public:
+
+    std::string get_task_fname_out() const { return task_def_.fname_out;}
+    PNGDataPtr getPNG_data() const { return png_data_; }
+
     TaskRunner(const TaskDef& task_def):
         task_def_(task_def)
     {
     }
 
-    void operator()()
+    bool operator()()
     {
         const std::string&  fname_in    = task_def_.fname_in;
         const std::string&  fname_out   = task_def_.fname_out;
@@ -169,6 +174,7 @@ public:
             PNGWriter writer;
             writer(width, height, BPP, &image_data[0], stride);
 
+            png_data_ = writer.getData();
             // Write it out ...
             std::ofstream file_out(fname_out, std::ofstream::binary);
             auto data = writer.getData();
@@ -180,6 +186,7 @@ public:
                       << ": "
                       << e.what()
                       << std::endl;
+            return false;
         }
         
         // Bring down ...
@@ -191,6 +198,8 @@ public:
                   << fname_in 
                   << "." 
                   << std::endl;
+
+        return true;
     }
 };
 
@@ -366,10 +375,7 @@ private:
 
         {
             std::unique_lock<std::mutex> lock(mutex_);
-
-            cv_.wait(lock, [&] {
-                return !task_queue_.empty() || !should_run_;
-            });
+            cv_.wait(lock, [&] {return !task_queue_.empty() || !should_run_;});
 
             if (!should_run_ && task_queue_.empty()) {
                 return;
@@ -378,13 +384,24 @@ private:
             task_def = task_queue_.front();
             task_queue_.pop();
 
+            if(png_cache_.find(task_def.fname_out) != png_cache_.end()) // Image not found
+                return;
+
             active_tasks_++;
         }
 
         try
         {
             TaskRunner runner(task_def);
-            runner();
+            if(runner())
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                png_cache_[runner.get_task_fname_out()] = runner.getPNG_data();
+            }
+            else
+            {
+                std::cerr << "Image not added to hash map" << std::endl;
+            }
         }
         catch (...)
         {
