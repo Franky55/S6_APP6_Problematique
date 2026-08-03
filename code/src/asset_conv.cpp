@@ -24,9 +24,6 @@ const int       NUM_THREADS = 1;    // Default value, changed by argv.
 const int       NEW_NUM_THREADS = 96;
 const bool      VERBOSE       = true;
 
-std::condition_variable cv_;
-std::mutex      mutex_;
-
 using PNGDataVec = std::vector<char>;
 using PNGDataPtr = std::shared_ptr<PNGDataVec>;
 
@@ -230,26 +227,23 @@ public:
 class Processor
 {
 private:
-    // The tasks to run queue (FIFO).
-    std::queue<TaskDef> task_queue_;
-    std::atomic<int> active_tasks_{0};
 
-    // The cache hash map (TODO). Note that we use the string definition as the // key.
+    std::queue<TaskDef> task_queue_;
+    std::condition_variable cv_, cv_finished_;
+    std::mutex      mutex_;
+
     using PNGHashMap = std::unordered_map<std::string, PNGDataPtr>;
     PNGHashMap png_cache_;
 
-    bool should_run_;           // Used to signal the end of the processor to
-                                // threads.
+    bool should_run_;
 
     std::vector<std::thread> queue_threads_;
 
+    std::atomic<int> active_tasks_{0};
+
+
 public:
-    /// \brief Default constructor.
-    ///
-    /// Creates background threads that monitors and processes the task queue.
-    /// These threads are joined and stopped at the destruction of the instance.
-    /// 
-    /// \param n_threads: Number of threads (default: NUM_THREADS)
+
     Processor(int n_threads = NUM_THREADS):
         should_run_(true)
     {
@@ -322,23 +316,6 @@ public:
             return true;
     }
 
-    /// \brief Tries to parse the given task definition and run it.
-    ///
-    /// The parsing method will output error messages if it is not valid. 
-    /// Nothing occurs if it's the case.
-    void parseAndRun(const std::string& line_org)
-    {
-        TaskDef def;
-        if (parse(line_org, def)) {
-            TaskRunner runner(def);
-            runner();
-        }
-    }
-
-    /// \brief Parse the task definition and put it in the processing queue.
-    ///
-    /// If the definition is invalid, error messages are sent to stderr and 
-    /// nothing is queued.
     void parseAndQueue(const std::string& line_org)
     {
         TaskDef def;
@@ -351,9 +328,9 @@ public:
                 if(VERBOSE)
                 {
                     std::cerr << "Queueing task '"
-                            << line_org
+                        << line_org
                             << "'."
-                            << std::endl;
+                        << std::endl;
                 }
 
                 task_queue_.push(def);
@@ -363,22 +340,14 @@ public:
         }
     }
 
-    /// \brief Returns if the internal queue is empty (true) or not.
-    bool queueEmpty()
+    void waitUntilFinished()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return task_queue_.empty();
-    }
-
-    bool isFinished()
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return task_queue_.empty()
-            && active_tasks_ == 0;
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_finished_.wait(lock, [&]{return task_queue_.empty() && active_tasks_ == 0;});
     }
 
 private:
-    /// \brief Queue processing thread function.
+
     void processQueue()
     {
         while (true)
@@ -405,7 +374,7 @@ private:
                 }
                 else
                 {
-                    png_cache_[task_def.fname_out] = nullptr; 
+                png_cache_[task_def.fname_out] = nullptr;
                     // std::cerr << "Adding image to hash map: " << task_def.fname_out << std::endl;
                 }
 
@@ -428,10 +397,24 @@ private:
             catch (...)
             {
                 std::cerr << "Unhandled exception in worker thread"
-                        << std::endl;
+                    << std::endl;
             }
 
-            active_tasks_--;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                active_tasks_--;
+
+                /*
+                    Réveille le main seulement
+                    lorsque tout est terminé.
+                */
+                if(task_queue_.empty()
+                   &&
+                   active_tasks_ == 0)
+                {
+                    cv_finished_.notify_all();
+                }
+            }
         }
     }
 };
@@ -459,7 +442,6 @@ int main(int argc, char** argv)
         std::cerr << "Using stdin (press CTRL-D for EOF)." << std::endl;
     }
 
-    // TODO: change the number of threads from args.
     Processor proc(NEW_NUM_THREADS);
     
     while (!std::cin.eof()) {
@@ -477,7 +459,6 @@ int main(int argc, char** argv)
     }
 
     // Wait until the processor queue's has tasks to do.
-    while (!proc.isFinished())
-    {
-    }
+    proc.waitUntilFinished();
+    
 }

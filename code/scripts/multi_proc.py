@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 
-NUM_PROCESSES = 5
+NUM_PROCESSES = 15
 
 def run_process(task_desc):
     p = subprocess.Popen(["./asset_conv"], stdin=subprocess.PIPE)
